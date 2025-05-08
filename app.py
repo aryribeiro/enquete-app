@@ -8,10 +8,42 @@ import os
 
 # Configurações iniciais
 st.set_page_config(
-    page_title="Enquete em Tempo Real",
+    page_title="Enquete App - A sua enquete em tempo real",
     page_icon="📊",
     layout="wide",
 )
+
+st.markdown("""
+<style>
+    .main {
+        background-color: #ffffff;
+        color: #333333;
+    }
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 0rem;
+    }
+    /* Esconde completamente todos os elementos da barra padrão do Streamlit */
+    header {display: none !important;}
+    footer {display: none !important;}
+    #MainMenu {display: none !important;}
+    /* Remove qualquer espaço em branco adicional */
+    div[data-testid="stAppViewBlockContainer"] {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    div[data-testid="stVerticalBlock"] {
+        gap: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    /* Remove quaisquer margens extras */
+    .element-container {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Função para criar hash da senha
 def hash_password(password):
@@ -110,7 +142,7 @@ def main():
 
 # Tela de login do professor
 def mostrar_tela_login():
-    st.title("Login do Professor")
+    st.title("🔐 Login do Professor")
     
     senha = st.text_input("Senha", type="password")
     
@@ -193,7 +225,7 @@ def mostrar_tela_aluno():
     
     # Verificar se há uma enquete ativa
     if not config["enquete_ativa"]:
-        st.title("Aguardando Nova Enquete")
+        st.title("⌛ Aguardando Nova Enquete")
         st.info("O professor ainda não iniciou uma nova enquete. Aguarde...")
         st.empty()
         
@@ -206,7 +238,7 @@ def mostrar_tela_aluno():
     dados_enquete = carregar_dados_enquete()
     resultados = carregar_resultados()
     
-    st.title("Enquete")
+    st.title("📊 Participe da enquete abaixo:")
     st.header(dados_enquete["pergunta"])
     
     # Verificar se o aluno já votou
@@ -272,3 +304,13 @@ def mostrar_resultados(dados_enquete, resultados, refresh=False):
 
 if __name__ == "__main__":
     main()
+
+# Rodapé
+st.markdown("""
+<hr>
+<div style="text-align:center; margin-top:40px; padding:10px; color:#000000; font-size:16px;">
+    <h4>📊 Enquete App</h4>
+            A sua enquete em tempo real<br>
+            Por <strong>Ary Ribeiro:</strong> <a href="mailto:aryribeiro@gmail.com">aryribeiro@gmail.com
+</div>
+""", unsafe_allow_html=True)
