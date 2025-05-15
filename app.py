@@ -13,6 +13,7 @@ DB_NAME = "enquete_app_vfinal.db" # Novo nome para evitar conflito com DBs antig
 MIN_OPTIONS = 2
 MAX_OPTIONS = 10
 DEFAULT_NUM_OPTIONS_ON_NEW = 2 # Default ao criar uma enquete do zero
+HISTORICO_LIMIT = 5
 
 # --- CSS Styling ---
 st.set_page_config(
@@ -20,6 +21,7 @@ st.set_page_config(
     page_icon="📊",
     layout="centered",
 )
+# Estilo CSS (mantido como no original, mas pode precisar de ajustes para a nova view)
 st.markdown("""
 <style>
     .main { background-color: #ffffff; color: #333333; }
@@ -30,6 +32,19 @@ st.markdown("""
     }
     .element-container { margin-top: 0 !important; margin-bottom: 0 !important; }
     .stButton>button { width: 100%; } /* Para botões da sidebar preencherem a coluna */
+    /* Estilo para links do histórico na sidebar */
+    .sidebar-history-link a {
+        font-size: 0.9em;
+        text-decoration: none;
+        display: block; /* Faz o link ocupar a largura e permite padding */
+        padding: 4px 0px; /* Ajuste o padding conforme necessário */
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .sidebar-history-link a:hover {
+        text-decoration: underline;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -42,8 +57,8 @@ def hash_password(password):
 def get_db_connection():
     """Estabelece e retorna uma conexão com o banco de dados SQLite."""
     conn = sqlite3.connect(DB_NAME, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL;") # Habilita WAL mode para melhor concorrência
-    conn.row_factory = sqlite3.Row # Permite acesso às colunas por nome
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
@@ -51,13 +66,12 @@ def init_db():
     Inicializa o banco de dados: cria tabelas se não existirem e
     insere configuração padrão (senha do admin).
     """
-    admin_password_default = "admin123" # Senha padrão inicial
+    admin_password_default = "admin123"
     admin_password_hash = hash_password(admin_password_default)
     
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Tabela de Configuração Geral
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS configuracao (
         chave TEXT PRIMARY KEY,
@@ -67,11 +81,10 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO configuracao (chave, valor) VALUES (?, ?)", 
                    ('senha_professor', admin_password_hash))
     cursor.execute("INSERT OR IGNORE INTO configuracao (chave, valor) VALUES (?, ?)", 
-                   ('enquete_ativa', '0')) # '0' para False, '1' para True
+                   ('enquete_ativa', '0'))
     cursor.execute("INSERT OR IGNORE INTO configuracao (chave, valor) VALUES (?, ?)", 
                    ('ultima_atualizacao_config', str(datetime.now())))
 
-    # Tabela para Definição da Enquete Ativa (apenas uma linha, id=1)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS enquete_ativa_definicao (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -83,7 +96,6 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO enquete_ativa_definicao (id, pergunta, opcoes_json) VALUES (1, ?, ?)", 
                    ('', default_opcoes_json))
 
-    # Tabela para Votos da Enquete Ativa
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS enquete_ativa_votos (
         opcao_indice INTEGER PRIMARY KEY,
@@ -91,34 +103,129 @@ def init_db():
     )
     """)
 
-    # Tabela para IPs Votantes da Enquete Ativa
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS enquete_ativa_ips_votantes (
         ip TEXT PRIMARY KEY
     )
     """)
+
+    # Nova tabela para o Histórico de Enquetes
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS historico_enquetes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        pergunta TEXT NOT NULL,
+        opcoes_json TEXT NOT NULL,
+        votos_json TEXT NOT NULL,
+        total_votos INTEGER DEFAULT 0
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_historico_timestamp ON historico_enquetes (timestamp DESC);")
+
     conn.commit()
     conn.close()
 
+# --- Funções de DB para Histórico ---
+def db_adicionar_ao_historico(pergunta, opcoes_lista, votos_lista, total_votos_final):
+    if not pergunta or not opcoes_lista: # Não salva histórico se dados essenciais estiverem faltando
+        st.warning("Tentativa de salvar enquete vazia no histórico. Operação ignorada.")
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    opcoes_json_str = json.dumps(opcoes_lista)
+    votos_json_str = json.dumps(votos_lista)
+    try:
+        cursor.execute("""
+            INSERT INTO historico_enquetes (pergunta, opcoes_json, votos_json, total_votos)
+            VALUES (?, ?, ?, ?)
+        """, (pergunta, opcoes_json_str, votos_json_str, total_votos_final))
+        conn.commit()
+    except sqlite3.Error as e:
+        st.error(f"Erro ao salvar enquete no histórico: {e}")
+    finally:
+        conn.close()
+    db_manter_limite_historico()
+
+def db_manter_limite_historico(limite=HISTORICO_LIMIT):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) as count FROM historico_enquetes")
+        count_row = cursor.fetchone()
+        if count_row and count_row['count'] > limite:
+            num_to_delete = count_row['count'] - limite
+            cursor.execute("""
+                DELETE FROM historico_enquetes
+                WHERE id IN (
+                    SELECT id FROM historico_enquetes
+                    ORDER BY timestamp ASC, id ASC
+                    LIMIT ?
+                )
+            """, (num_to_delete,))
+            conn.commit()
+    except sqlite3.Error as e:
+        st.error(f"Erro ao manter limite do histórico: {e}")
+    finally:
+        conn.close()
+
+def db_carregar_historico(limite=HISTORICO_LIMIT):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, pergunta, timestamp FROM historico_enquetes
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?
+        """, (limite,))
+        historico = cursor.fetchall()
+        return historico
+    except sqlite3.Error as e:
+        st.error(f"Erro ao carregar histórico: {e}")
+        return []
+    finally:
+        conn.close()
+
+def db_carregar_enquete_historico_por_id(id_historico):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT pergunta, opcoes_json, votos_json, total_votos, timestamp FROM historico_enquetes WHERE id = ?", (id_historico,))
+        enquete_data = cursor.fetchone()
+        if enquete_data:
+            return {
+                "pergunta": enquete_data["pergunta"],
+                "opcoes": json.loads(enquete_data["opcoes_json"]),
+                "votos": json.loads(enquete_data["votos_json"]),
+                "total_votos": enquete_data["total_votos"],
+                "timestamp": enquete_data["timestamp"]
+            }
+        return None
+    except (sqlite3.Error, json.JSONDecodeError) as e:
+        st.error(f"Erro ao carregar enquete do histórico por ID: {e}")
+        return None
+    finally:
+        conn.close()
+
+# --- Demais funções de DB (db_carregar_config_valor, db_salvar_config_valor, etc.) ---
+# (Mantidas como no original)
 def db_carregar_config_valor(chave, default=None):
-    """Carrega um valor específico da tabela de configuração."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT valor FROM configuracao WHERE chave = ?", (chave,))
     row = cursor.fetchone()
     conn.close()
     if row:
-        if chave == 'enquete_ativa': # Tratar booleano especificamente
+        if chave == 'enquete_ativa':
             return True if row['valor'] == '1' else False
         return row['valor']
     return default
 
 def db_salvar_config_valor(chave, valor):
-    """Salva um valor específico na tabela de configuração."""
     conn = get_db_connection()
     cursor = conn.cursor()
     valor_db = valor
-    if chave == 'enquete_ativa': # Tratar booleano
+    if chave == 'enquete_ativa':
         valor_db = '1' if valor else '0'
     
     cursor.execute("REPLACE INTO configuracao (chave, valor) VALUES (?, ?)", (chave, valor_db))
@@ -128,7 +235,6 @@ def db_salvar_config_valor(chave, valor):
     conn.close()
 
 def db_carregar_dados_enquete():
-    """Carrega a pergunta e as opções da enquete ativa."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT pergunta, opcoes_json FROM enquete_ativa_definicao WHERE id = 1")
@@ -139,11 +245,10 @@ def db_carregar_dados_enquete():
             opcoes = json.loads(row["opcoes_json"])
             return {"pergunta": row["pergunta"], "opcoes": opcoes}
         except json.JSONDecodeError:
-            pass # Retorna default abaixo se JSON inválido
+            pass 
     return {"pergunta": "", "opcoes": [""] * DEFAULT_NUM_OPTIONS_ON_NEW}
 
 def db_salvar_dados_enquete(pergunta, opcoes_lista):
-    """Salva a pergunta e as opções da enquete ativa."""
     opcoes_json_str = json.dumps(opcoes_lista)
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -153,7 +258,6 @@ def db_salvar_dados_enquete(pergunta, opcoes_lista):
     conn.close()
 
 def db_limpar_votos_e_ips(num_opcoes_enquete_atual):
-    """Limpa os votos e IPs registrados, e reinicializa os contadores de voto."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM enquete_ativa_votos")
@@ -166,7 +270,6 @@ def db_limpar_votos_e_ips(num_opcoes_enquete_atual):
     conn.close()
 
 def db_carregar_resultados(num_opcoes_enquete_atual):
-    """Carrega os resultados da votação (contagens e total)."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT opcao_indice, contagem FROM enquete_ativa_votos ORDER BY opcao_indice ASC")
@@ -184,7 +287,6 @@ def db_carregar_resultados(num_opcoes_enquete_atual):
     return {"votos": votos_lista, "total_votos": total_votos}
 
 def db_registrar_voto(opcao_indice, ip_votante):
-    """Registra um voto. Retorna True se sucesso, False se IP já votou."""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -192,13 +294,12 @@ def db_registrar_voto(opcao_indice, ip_votante):
         cursor.execute("UPDATE enquete_ativa_votos SET contagem = contagem + 1 WHERE opcao_indice = ?", (opcao_indice,))
         conn.commit()
         return True
-    except sqlite3.IntegrityError: # IP já existe (UNIQUE constraint falhou)
+    except sqlite3.IntegrityError:
         return False 
     finally:
         conn.close()
 
 def db_verificar_se_ip_votou(ip_votante):
-    """Verifica se um IP já votou na enquete ativa."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT 1 FROM enquete_ativa_ips_votantes WHERE ip = ?", (ip_votante,))
@@ -208,7 +309,6 @@ def db_verificar_se_ip_votou(ip_votante):
 
 # --- Gerenciamento de Estado da Sessão Streamlit ---
 def initialize_session_state():
-    """Inicializa as variáveis de estado da sessão do Streamlit se não existirem."""
     defaults = {
         'modo': 'aluno', 'client_ip': None, 'ip_fetch_error': False,
         'voto_registrado_nesta_sessao': False, 'pagina_professor': 'painel',
@@ -218,14 +318,12 @@ def initialize_session_state():
     for key, value in defaults.items():
         if key not in st.session_state: st.session_state[key] = value
     
-    # Resetar flags de busca de IP se estiver no modo aluno e IP não estiver definido
     if st.session_state.modo == 'aluno' and not st.session_state.client_ip and not st.session_state.ip_fetch_error:
         st.session_state.first_load_ip_check_done = False
         st.session_state.initial_rerun_for_ip_done = False
 
 # --- Funções de Lógica da Aplicação e Renderização de UI ---
 def fetch_client_ip_address():
-    """Busca o IP do cliente silenciosamente e atualiza o estado da sessão."""
     if st.session_state.get('client_ip'): return st.session_state.client_ip
     if st.session_state.get('ip_fetch_error', False): return None
     try:
@@ -242,7 +340,6 @@ def fetch_client_ip_address():
     return None
 
 def mostrar_tela_login():
-    # ... (Implementação como na versão anterior, usando db_carregar_config_valor e hash_password)
     st.title("🔐 Login do Professor")
     senha_digitada = st.text_input("Senha", type="password", key="login_senha_vfinal")
     if st.button("Entrar", key="login_entrar_vfinal"):
@@ -255,7 +352,6 @@ def mostrar_tela_login():
 
 def mostrar_painel_professor():
     st.title("🖥️​ Painel do Professor")
-    # Botões de Navegação do Painel
     col_nav1, col_nav2 = st.columns(2)
     with col_nav1:
         if st.button("🔐 Alterar Senha", key="painel_btn_alt_senha", use_container_width=True):
@@ -263,22 +359,18 @@ def mostrar_painel_professor():
     with col_nav2:
         if st.button("🚪 Logout", key="painel_btn_logout", use_container_width=True):
             st.session_state.modo = 'login_professor'; st.session_state.pagina_professor = 'painel'
-            # Limpar flags de sessão do aluno/IP
             st.session_state.client_ip = None; st.session_state.ip_fetch_error = False
             st.session_state.voto_registrado_nesta_sessao = False
             st.session_state.first_load_ip_check_done = False; st.session_state.initial_rerun_for_ip_done = False
             st.rerun(); return
     st.divider()
 
-    # Carregar dados atuais
     enquete_ativa_db = db_carregar_config_valor('enquete_ativa', False)
     dados_enquete_db = db_carregar_dados_enquete()
     
-    # Input para número de opções
     opcoes_salvas = dados_enquete_db.get("opcoes", [])
     num_opcoes_atuais = len(opcoes_salvas) if opcoes_salvas else st.session_state.num_opcoes_edicao
     
-    # Sincronizar st.session_state.num_opcoes_edicao com o que está no DB ou com o widget
     if 'num_opcoes_edicao_loaded' not in st.session_state or st.session_state.num_opcoes_edicao_loaded != num_opcoes_atuais:
         st.session_state.num_opcoes_edicao = max(MIN_OPTIONS, min(num_opcoes_atuais, MAX_OPTIONS))
         st.session_state.num_opcoes_edicao_loaded = num_opcoes_atuais
@@ -288,16 +380,15 @@ def mostrar_painel_professor():
         value=st.session_state.num_opcoes_edicao, step=1, key="prof_num_opcoes_selector",
         on_change=lambda: st.session_state.update({'num_opcoes_edicao': st.session_state.prof_num_opcoes_selector, 'num_opcoes_edicao_loaded': st.session_state.prof_num_opcoes_selector})
     )
-    if st.session_state.num_opcoes_edicao != num_opcoes_widget: # Se mudou via widget
+    if st.session_state.num_opcoes_edicao != num_opcoes_widget:
          st.session_state.num_opcoes_edicao = num_opcoes_widget
     
-    # Formulário de Gerenciamento da Enquete
     st.subheader("Gerenciar Enquete")
     with st.form("painel_enquete_form_db_vfinal"):
         pergunta_form = st.text_input("Pergunta da Enquete", value=dados_enquete_db.get("pergunta", ""), key="painel_pergunta_db_vfinal")
         st.write(f"Opções de Resposta ({st.session_state.num_opcoes_edicao} opções):")
         
-        opcoes_form_inputs = [""] * st.session_state.num_opcoes_edicao # Inicializa lista com tamanho correto
+        opcoes_form_inputs = [""] * st.session_state.num_opcoes_edicao
         for i in range(st.session_state.num_opcoes_edicao):
             val_opt = opcoes_salvas[i] if i < len(opcoes_salvas) else ""
             opcoes_form_inputs[i] = st.text_input(f"Opção {i+1}", value=val_opt, key=f"painel_opt_db_vfinal_{i}")
@@ -305,42 +396,77 @@ def mostrar_painel_professor():
         submit_save_enquete = st.form_submit_button("Salvar e Ativar Enquete")
             
     if submit_save_enquete:
-        opcoes_finais_para_salvar = [opcoes_form_inputs[i] for i in range(st.session_state.num_opcoes_edicao)]
-        db_salvar_dados_enquete(pergunta_form, opcoes_finais_para_salvar)
-        db_salvar_config_valor('enquete_ativa', True)
-        db_limpar_votos_e_ips(len(opcoes_finais_para_salvar)) # Reseta votos para a nova enquete
-        st.success("Enquete salva, ativada e votos resetados!"); st.rerun(); return
+        # Salvar enquete anterior no histórico ANTES de sobrescrever/limpar
+        dados_enquete_anterior = db_carregar_dados_enquete()
+        enquete_estava_ativa_anteriormente = db_carregar_config_valor('enquete_ativa', False)
+
+        if enquete_estava_ativa_anteriormente and dados_enquete_anterior.get("pergunta","").strip():
+            num_opcoes_anterior = len(dados_enquete_anterior.get("opcoes", []))
+            if num_opcoes_anterior >= MIN_OPTIONS:
+                resultados_anterior = db_carregar_resultados(num_opcoes_anterior)
+                db_adicionar_ao_historico(
+                    dados_enquete_anterior["pergunta"],
+                    dados_enquete_anterior["opcoes"],
+                    resultados_anterior["votos"],
+                    resultados_anterior["total_votos"]
+                )
+        
+        opcoes_finais_para_salvar = [opt.strip() for opt in opcoes_form_inputs[:st.session_state.num_opcoes_edicao]]
+        opcoes_validas_count = sum(1 for opt in opcoes_finais_para_salvar if opt)
+
+        if not pergunta_form.strip() or opcoes_validas_count < MIN_OPTIONS:
+            st.error(f"A pergunta não pode ser vazia e deve haver pelo menos {MIN_OPTIONS} opções preenchidas.")
+        else:
+            db_salvar_dados_enquete(pergunta_form, opcoes_finais_para_salvar)
+            db_salvar_config_valor('enquete_ativa', True)
+            db_limpar_votos_e_ips(len(opcoes_finais_para_salvar))
+            st.success("Enquete salva, ativada e votos resetados!"); st.rerun()
             
     if enquete_ativa_db:
         if st.button("Desativar Enquete", key="painel_desativar_db_vfinal"):
+            # Salvar enquete que está sendo desativada no histórico
+            dados_enquete_a_desativar = db_carregar_dados_enquete()
+            if dados_enquete_a_desativar.get("pergunta","").strip():
+                num_opcoes_desativada = len(dados_enquete_a_desativar.get("opcoes", []))
+                if num_opcoes_desativada >= MIN_OPTIONS:
+                    resultados_desativada = db_carregar_resultados(num_opcoes_desativada)
+                    db_adicionar_ao_historico(
+                        dados_enquete_a_desativar["pergunta"],
+                        dados_enquete_a_desativar["opcoes"],
+                        resultados_desativada["votos"],
+                        resultados_desativada["total_votos"]
+                    )
+            
             db_salvar_config_valor('enquete_ativa', False)
-            # Limpa votos da enquete que foi desativada
-            num_opcoes_enq_desativada = len(db_carregar_dados_enquete().get("opcoes", []))
-            db_limpar_votos_e_ips(max(MIN_OPTIONS, num_opcoes_enq_desativada))
-            st.success("Enquete desativada e votos resetados!"); st.rerun(); return
+            # Limpar votos da enquete que foi desativada (já que os dados dela foram para o histórico)
+            # A pergunta e opções em 'enquete_ativa_definicao' podem permanecer ou serem limpas.
+            # Vamos limpar para evitar confusão, mas manter o número de opções para db_limpar_votos_e_ips
+            num_opcoes_enq_desativada_calc = len(dados_enquete_a_desativar.get("opcoes", []))
+            # db_salvar_dados_enquete("", [""] * DEFAULT_NUM_OPTIONS_ON_NEW) # Opcional: limpar definição ativa
+            db_limpar_votos_e_ips(max(MIN_OPTIONS, num_opcoes_enq_desativada_calc))
+            st.success("Enquete desativada, resultados arquivados e votos resetados!"); st.rerun()
     
-    # Status e Resultados
     st.subheader("Status da Enquete")
-    # Recarrega o status da enquete pois pode ter mudado
     enquete_ativa_status_display = db_carregar_config_valor('enquete_ativa', False) 
     if enquete_ativa_status_display: st.success("Enquete ATIVA")
     else: st.error("Enquete INATIVA")
     
-    st.subheader("Resultados da Votação") # Chamado apenas UMA VEZ AQUI
+    st.subheader("Resultados da Votação")
     if enquete_ativa_status_display:
         dados_enquete_atuais_resultados = db_carregar_dados_enquete()
         num_opcoes_resultados = len(dados_enquete_atuais_resultados.get("opcoes",[]))
-        resultados_db_display = db_carregar_resultados(max(MIN_OPTIONS, num_opcoes_resultados))
-        mostrar_resultados(dados_enquete_atuais_resultados, resultados_db_display, refresh=True)
+        if num_opcoes_resultados > 0 : # Só mostrar se há opções
+            resultados_db_display = db_carregar_resultados(num_opcoes_resultados)
+            mostrar_resultados(dados_enquete_atuais_resultados, resultados_db_display, refresh=True)
+        else:
+            st.info("A enquete ativa não possui opções configuradas.")
     else:
         st.info("A enquete está inativa. Ative-a para ver os resultados ou permitir novos votos.")
 
-    # Refresh automático para o professor APENAS se a enquete estiver ativa.
     if enquete_ativa_status_display:
         time.sleep(3); st.rerun()
 
 def mostrar_tela_alterar_senha():
-    # ... (como na última versão, com keys atualizadas e return após rerun)
     st.title("🔑 Alterar Senha do Professor")
     with st.form("alt_senha_frm_vfinal"):
         nova_senha = st.text_input("Nova Senha", type="password", key="alt_nova_senha_vfinal")
@@ -353,46 +479,46 @@ def mostrar_tela_alterar_senha():
             else:
                 db_salvar_config_valor('senha_professor', hash_password(nova_senha))
                 st.success("Senha alterada! Retornando ao painel..."); time.sleep(1.5)
-                st.session_state.pagina_professor = 'painel'; st.rerun(); return
+                st.session_state.pagina_professor = 'painel'; st.rerun()
     st.divider()
     if st.button("Voltar ao Painel", key="alt_voltar_vfinal"):
-        st.session_state.pagina_professor = 'painel'; st.rerun(); return
+        st.session_state.pagina_professor = 'painel'; st.rerun()
 
 def mostrar_tela_aluno():
-    # ... (como na última versão que estava estável para o aluno, com ajustes para DB)
     config_enquete_ativa = db_carregar_config_valor('enquete_ativa', False)
     client_ip = st.session_state.get('client_ip')
 
-    # Lógica de busca de IP (mais robusta para evitar reruns excessivos)
     if not client_ip and not st.session_state.get('ip_fetch_error', False):
         if not st.session_state.get('first_load_ip_check_done', False):
-            client_ip = fetch_client_ip_address() # Nome da função de busca de IP
+            client_ip = fetch_client_ip_address()
             st.session_state.first_load_ip_check_done = True
-            # Só faz rerun se IP não foi obtido E não houve erro, e é a primeira tentativa de rerun
             if not client_ip and not st.session_state.get('ip_fetch_error', False) and \
                not st.session_state.get('initial_rerun_for_ip_done', False):
                 st.session_state.initial_rerun_for_ip_done = True
                 time.sleep(0.1); st.rerun() 
-                # Não usar st.stop() aqui para permitir que o rodapé seja renderizado mesmo se o IP estiver pendente
     
     if not client_ip:
         if st.session_state.get('ip_fetch_error', False):
             st.title("📊 Enquete Indisponível"); st.error("Falha ao verificar IP. Recarregue (F5).")
         else:
             st.warning("Verificação de rede pendente. Use 'Recarregar' na barra lateral ou F5 se a enquete não aparecer.")
-        return # Impede o resto se o IP não estiver pronto
+        return
 
     if not config_enquete_ativa:
         st.title("⌛ Aguardando Nova Enquete")
         st.info("Nenhuma enquete ativa no momento. Use o botão 'Recarregar' no Menu lateral para verificar novamente.")
-        # O st.rerun automático foi removido daqui. O usuário usa o botão Recarregar.
         return
 
-    # Se chegou aqui, enquete está ativa e temos IP
     dados_enquete_db = db_carregar_dados_enquete()
     opcoes_enquete_lista = dados_enquete_db.get("opcoes", [])
     num_opcoes_atual = len(opcoes_enquete_lista)
-    resultados_db = db_carregar_resultados(max(MIN_OPTIONS, num_opcoes_atual)) # Garante min opções
+
+    if not dados_enquete_db.get("pergunta","").strip() or num_opcoes_atual < MIN_OPTIONS :
+         st.title("⌛ Enquete em Configuração")
+         st.info("A enquete atual ainda não está pronta. Por favor, aguarde.")
+         return # Não mostrar enquete se não tiver pergunta ou opções suficientes
+    
+    resultados_db = db_carregar_resultados(num_opcoes_atual)
     
     ja_votou_db = db_verificar_se_ip_votou(client_ip)
     st.session_state.voto_registrado_nesta_sessao = ja_votou_db
@@ -405,40 +531,43 @@ def mostrar_tela_aluno():
         mostrar_resultados(dados_enquete_db, resultados_db, refresh=config_enquete_ativa)
     else:
         opcoes_validas_aluno = [opt for opt in opcoes_enquete_lista if opt and opt.strip()]
-        if not dados_enquete_db.get("pergunta","").strip() or not opcoes_validas_aluno:
-            st.warning("A enquete ainda não foi completamente configurada."); return
+        if not opcoes_validas_aluno: # Checagem redundante, mas segura
+            st.warning("A enquete não possui opções válidas no momento."); return
 
         key_radio_aluno = f"voto_radio_db_vfinal_{hashlib.md5(json.dumps(opcoes_validas_aluno).encode()).hexdigest()}"
         opcao_escolhida_aluno = st.radio("Escolha uma opção:", opcoes_validas_aluno, key=key_radio_aluno)
         
         if st.button("Votar", key="aluno_votar_db_vfinal"):
-            ip_on_vote_db = fetch_client_ip_address() # Reconfirmar IP no momento do voto
+            ip_on_vote_db = fetch_client_ip_address() 
             if not ip_on_vote_db: st.error("Falha ao verificar IP para voto. Recarregue."); return
             
-            if db_verificar_se_ip_votou(ip_on_vote_db): # Checagem final
+            if db_verificar_se_ip_votou(ip_on_vote_db):
                 st.warning(f"Voto já registrado para IP: {ip_on_vote_db}."); st.session_state.voto_registrado_nesta_sessao = True; st.rerun(); return
             
             if opcao_escolhida_aluno:
                 try: 
-                    indice_opcao_votada = opcoes_enquete_lista.index(opcao_escolhida_aluno)
+                    indice_opcao_votada = opcoes_enquete_lista.index(opcao_escolhida_aluno) # Usa a lista original para achar o índice
                     if db_registrar_voto(indice_opcao_votada, ip_on_vote_db):
                         st.session_state.voto_registrado_nesta_sessao=True
                         st.success(f"Voto registrado (IP: {ip_on_vote_db})!"); time.sleep(1); st.rerun()
-                    else: st.error("Erro: IP já votou (verificação falhou).") # Não deveria chegar aqui
+                    else: st.error("Erro: IP já votou (verificação falhou).")
                 except ValueError: st.error("Opção inválida. Tente novamente.")
                 except Exception as e: st.error(f"Erro ao votar: {e}")
             else: st.warning("Selecione uma opção.")
 
 def mostrar_resultados(dados_enquete_param, resultados_param, refresh=False):
-    # st.subheader("Resultados da Votação") # Agora chamado pelo chamador (mostrar_painel_professor)
     total_votos_param = resultados_param.get("total_votos", 0)
+    opcoes_da_enquete_param = dados_enquete_param.get("opcoes", [])
+    
+    if not opcoes_da_enquete_param:
+        st.info("Não há opções definidas para esta enquete.")
+        return
+
     if total_votos_param == 0: st.info("Ainda não há votos registrados."); return 
     
-    opcoes_da_enquete_param = dados_enquete_param.get("opcoes", [])
     votos_registrados_param = resultados_param.get("votos", [])
     num_opcoes_atual_param = len(opcoes_da_enquete_param)
 
-    # Ajusta a lista de votos para o número de opções atual, se necessário
     if len(votos_registrados_param) != num_opcoes_atual_param:
         votos_ajustados = [0] * num_opcoes_atual_param
         for i in range(min(len(votos_registrados_param), num_opcoes_atual_param)):
@@ -459,34 +588,130 @@ def mostrar_resultados(dados_enquete_param, resultados_param, refresh=False):
     for _, row_param in df_param.iterrows():
         st.write(f"**{row_param['opcao']}**: {row_param['votos']} ({row_param['percentual']:.1f}%)"); st.progress(int(row_param["percentual"]))
             
-    if refresh: time.sleep(2); st.rerun()
+    if refresh and st.session_state.modo == 'professor': # Refresh automático só para professor aqui
+        time.sleep(2); st.rerun()
+    elif refresh and st.session_state.modo == 'aluno' and db_carregar_config_valor('enquete_ativa', False): # Aluno só se enquete ativa
+        time.sleep(5); st.rerun()
+
+
+# --- Nova Função para Mostrar Enquete do Histórico ---
+def mostrar_enquete_historico(id_historico):
+    # Configurações da página para a view de histórico
+    # st.set_page_config(layout="centered") # Já é setado globalmente
+    
+    dados_enquete = db_carregar_enquete_historico_por_id(id_historico)
+    if dados_enquete:
+        st.title(f"📜 Histórico da Enquete")
+        st.subheader(f"Pergunta: {dados_enquete['pergunta']}")
+        try:
+            ts_obj = datetime.fromisoformat(dados_enquete['timestamp'])
+            st.caption(f"Realizada em: {ts_obj.strftime('%d/%m/%Y %H:%M:%S')}")
+        except ValueError: # Fallback se o timestamp não estiver no formato ISO completo
+            st.caption(f"Realizada em: {dados_enquete['timestamp'].split('.')[0]}") # Tenta formatar o básico
+        st.divider()
+
+        total_votos_hist = dados_enquete.get("total_votos", 0)
+        opcoes_hist = dados_enquete.get("opcoes", [])
+        votos_hist = dados_enquete.get("votos", [])
+
+        if not opcoes_hist:
+            st.info("Não há opções definidas para esta enquete do histórico.")
+        elif total_votos_hist == 0:
+            st.info("Não houve votos registrados para esta enquete.")
+        else:
+            num_opcoes_hist = len(opcoes_hist)
+            if len(votos_hist) != num_opcoes_hist: # Ajuste de segurança
+                votos_ajustados = [0] * num_opcoes_hist
+                for i in range(min(len(votos_hist), num_opcoes_hist)):
+                    votos_ajustados[i] = votos_hist[i]
+                votos_hist = votos_ajustados
+            
+            dados_df_hist = []
+            for i, opt_txt in enumerate(opcoes_hist):
+                if opt_txt and opt_txt.strip():
+                    v_count = votos_hist[i] if i < len(votos_hist) else 0
+                    perc = (v_count / total_votos_hist) * 100 if total_votos_hist > 0 else 0
+                    dados_df_hist.append({"opcao": opt_txt, "votos": v_count, "percentual": perc})
+            
+            if not dados_df_hist:
+                st.info("Sem dados de votação válidos para exibir do histórico.")
+            else:
+                df_hist = pd.DataFrame(dados_df_hist)
+                st.write(f"**Total de votos: {total_votos_hist}**")
+                for _, row_hist in df_hist.iterrows():
+                    st.write(f"**{row_hist['opcao']}**: {row_hist['votos']} ({row_hist['percentual']:.1f}%)")
+                    st.progress(int(row_hist["percentual"]))
+        st.divider()
+        if st.button("⬅️ Voltar à página principal", key="voltar_hist_main"):
+            # Limpa os query params para voltar à visualização normal
+            # A forma mais simples é navegar para a raiz da app sem query_params
+            # st.experimental_set_query_params() # Para versões mais antigas
+            st.query_params.clear()
+            st.rerun()
+    else:
+        st.error("Enquete não encontrada no histórico.")
+        if st.button("⬅️ Voltar à página principal", key="voltar_hist_err"):
+            # st.experimental_set_query_params()
+            st.query_params.clear()
+            st.rerun()
 
 # --- Roteador Principal da Aplicação ---
 def app_router():
     initialize_session_state()
-    init_db() # Garante que o DB e tabelas existam
+    init_db()
 
+    # Lógica para visualização de enquete do histórico usando st.query_params
+    # (Assumindo Streamlit >= 1.18.0 para st.query_params)
+    # Se estiver usando versão anterior, substitua st.query_params por st.experimental_get_query_params() etc.
+    
+    page_param = st.query_params.get("page", None)
+    enquete_id_param_list = st.query_params.get_all("enquete_id") # get_all retorna lista
+    enquete_id_param = enquete_id_param_list[0] if enquete_id_param_list else None
+
+
+    if page_param == "historico_view":
+        if enquete_id_param:
+            try:
+                enquete_id_hist = int(enquete_id_param)
+                mostrar_enquete_historico(enquete_id_hist)
+                return # Importante: para a execução aqui para não renderizar o resto
+            except ValueError:
+                st.error("ID de enquete do histórico inválido.")
+                if st.button("⬅️ Voltar"):
+                    st.query_params.clear(); st.rerun()
+                return
+        else:
+            st.warning("ID da enquete do histórico não fornecido.")
+            if st.button("⬅️ Voltar"):
+                st.query_params.clear(); st.rerun()
+            return
+
+    # Barra Lateral
     with st.sidebar:
         st.title("Menu")
         
-        # Botão Modo Professor (sempre visível, largura total da sidebar)
         if st.button("Professor", key="sidebar_prof_vfinal", use_container_width=True):
             current_mode = st.session_state.get('modo')
-            if current_mode != 'login_professor': # Leva ao login se não estiver já lá
+            # Se já estiver no modo professor, não faz nada para evitar reset desnecessário de query_params
+            if not (current_mode == 'professor' or current_mode == 'login_professor'):
+                st.query_params.clear() # Limpa query params ao mudar de modo explicitamente
                 st.session_state.modo = 'login_professor'
                 st.session_state.pagina_professor = 'painel' 
-                # Resetar flags de aluno se estava no modo aluno
                 if current_mode == 'aluno':
                     st.session_state.client_ip = None; st.session_state.ip_fetch_error = False
                     st.session_state.first_load_ip_check_done = False; st.session_state.initial_rerun_for_ip_done = False
                 st.rerun()
+            elif current_mode == 'login_professor': # Se já está no login, apenas rerun para garantir estado limpo
+                st.query_params.clear()
+                st.rerun()
 
-        # Botões "Modo Aluno" e "Recarregar" lado a lado, se professor não estiver logado
+
         if st.session_state.modo != 'professor':
-            col_sb1, col_sb2 = st.columns([3,2]) # Ajustar proporção se necessário
+            col_sb1, col_sb2 = st.columns([3,2])
             with col_sb1:
                 if st.button("Aluno", key="sidebar_aluno_vfinal", use_container_width=True):
                     if st.session_state.modo != 'aluno':
+                        st.query_params.clear() # Limpa query params
                         st.session_state.modo = 'aluno'
                         st.session_state.client_ip = None; st.session_state.ip_fetch_error = False
                         st.session_state.first_load_ip_check_done = False; st.session_state.initial_rerun_for_ip_done = False
@@ -494,26 +719,47 @@ def app_router():
             with col_sb2:
                 if st.session_state.modo == 'aluno': 
                     if st.button("Recarregar", key="sidebar_recarregar_vfinal", help="Recarregar enquete/resultados", use_container_width=True):
+                        # Não precisa limpar query_params aqui, pois é um refresh da view aluno
                         st.session_state.client_ip = None; st.session_state.ip_fetch_error = False
                         st.session_state.first_load_ip_check_done = False; st.session_state.initial_rerun_for_ip_done = False
                         st.rerun()
+        
+        st.divider() # Divisor antes do Histórico
+        st.title("Histórico")
+        historico_enquetes = db_carregar_historico(limite=HISTORICO_LIMIT)
+        if historico_enquetes:
+            for item_hist in historico_enquetes:
+                pergunta_curta = item_hist['pergunta'][:25] + "..." if len(item_hist['pergunta']) > 25 else item_hist['pergunta']
+                try:
+                    # Tenta converter de string ISO para objeto datetime
+                    ts_obj = datetime.fromisoformat(item_hist['timestamp'])
+                    ts_formatado = ts_obj.strftime('%d/%m %H:%M')
+                except ValueError: # Fallback se o timestamp não for ISO completo (ex: SQLite default)
+                    try: # Tenta formato comum do SQLite CURRENT_TIMESTAMP
+                        ts_obj = datetime.strptime(item_hist['timestamp'].split('.')[0], '%Y-%m-%d %H:%M:%S')
+                        ts_formatado = ts_obj.strftime('%d/%m %H:%M')
+                    except ValueError: # Último fallback
+                        ts_formatado = item_hist['timestamp'].split(' ')[0] # Apenas data se tudo falhar
+
+                # Usar markdown para link com target="_blank"
+                # O URL relativo "?page=..." funcionará corretamente
+                link_html = f"<a href='?page=historico_view&enquete_id={item_hist['id']}' target='_blank'>📊 {pergunta_curta} ({ts_formatado})</a>"
+                st.markdown(f"<div class='sidebar-history-link'>{link_html}</div>", unsafe_allow_html=True)
+        else:
+            st.sidebar.caption("Nenhuma enquete no histórico.")
     
     # Roteamento de tela principal
     modo_atual = st.session_state.get('modo')
-    if modo_atual == 'login_professor': mostrar_tela_login(); st.stop()
+    if modo_atual == 'login_professor': mostrar_tela_login()
     elif modo_atual == 'professor':
         if st.session_state.pagina_professor == 'painel': mostrar_painel_professor()
         elif st.session_state.pagina_professor == 'alterar_senha': mostrar_tela_alterar_senha()
         else: st.session_state.pagina_professor = 'painel'; st.rerun()
-        st.stop() # Para garantir que só a tela do professor execute
     elif modo_atual == 'aluno':
         mostrar_tela_aluno()
-        # st.stop() aqui pode ser problemático se mostrar_tela_aluno precisar de um rerun interno para IP
-        # A lógica interna de return em mostrar_tela_aluno deve ser suficiente.
-    else: # Estado inválido
+    else: 
         st.session_state.modo = 'aluno'; st.rerun() 
     
-    # Rodapé
     st.markdown("""<hr><div style="text-align:center; margin-top:40px; padding:10px; color:#000000; font-size:16px;"><h4>📊 Enquete App</h4>Sua enquete em tempo real<br>Por <strong>Ary Ribeiro:</strong> <a href="mailto:aryribeiro@gmail.com">aryribeiro@gmail.com</div>""", unsafe_allow_html=True)
 
 if __name__ == "__main__":
