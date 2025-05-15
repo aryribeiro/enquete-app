@@ -1,65 +1,121 @@
-# Enquete em Tempo Real (Streamlit)
+# Enquete App | Sua Enquete em Tempo Real 📊
 
-Um aplicativo web para criar e gerenciar enquetes em tempo real para uso em sala de aula. Ideal para professores que desejam interagir com seus alunos e obter feedback instantâneo durante as aulas.
+O Enquete App é uma aplicação web construída com Streamlit e Python que permite a criação de enquetes em tempo real. É ideal para salas de aula, apresentações ou qualquer situação onde um feedback rápido do público é necessário.
 
-## 🌟 Funcionalidades
+## Funcionalidades Principais
 
-- **Modo Professor**: Interface protegida por senha para criar e gerenciar enquetes
-- **Modo Aluno**: Interface simplificada para participar das enquetes
-- **Enquetes em Tempo Real**: Atualizações automáticas na tela dos alunos quando uma nova enquete é criada
-- **Visualização dos Resultados**: Apresentação dos resultados com barras horizontais e percentuais
-- **Persistência de Dados**: Os dados são salvos localmente e mantidos entre sessões
+* **Dois Modos de Usuário**:
+    * **Professor**: Controla a enquete.
+    * **Aluno**: Participa da enquete.
+* **Painel do Professor**:
+    * Login seguro com senha (hash SHA256).
+    * Criação e edição de enquetes com pergunta e um número flexível de opções de resposta (2 a 10).
+    * Ativação e desativação de enquetes.
+    * Ao desativar uma enquete, os votos e registros de IP são resetados.
+    * Visualização dos resultados da votação em tempo real (auto-refresh).
+    * Opção para alterar a senha do professor.
+    * Botão de Logout.
+* **Interface do Aluno**:
+    * Visualização da enquete ativa.
+    * Sistema de votação que permite um voto por endereço IP para a enquete ativa.
+    * Obtenção do IP do aluno via API externa (`ipify.org`) para controle de voto único.
+    * Visualização dos resultados da votação em tempo real (auto-refresh) após ter votado.
+    * Botão "Recarregar Enquete" para atualização manual do status da enquete.
+    * Tela de "Aguardando Nova Enquete" com auto-refresh para verificar quando uma enquete se torna ativa.
+* **Persistência de Dados**:
+    * Utiliza um banco de dados **SQLite (`enquete_app_vfinal.db`)** para armazenar:
+        * Configurações da aplicação (senha do professor, status da enquete).
+        * Definição da enquete ativa (pergunta e opções).
+        * Contagem de votos para cada opção.
+        * Endereços IP dos participantes que já votaram.
+* **Interface Customizada**:
+    * Layout limpo e focado, com elementos padrão do Streamlit ocultados (menu, header, footer) para uma experiência mais imersiva.
 
-## 🔧 Instalação
+## Tecnologias Utilizadas
 
-1. Clone este repositório ou baixe os arquivos
-2. Instale as dependências:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Execute o aplicativo:
-   ```
-   streamlit run app.py
-   ```
+* **Python 3**
+* **Streamlit**: Para a interface web interativa.
+* **SQLite**: Para armazenamento de dados persistente.
+* **Pandas**: Para manipulação e exibição de dados (resultados da enquete).
+* **Requests**: Para chamadas HTTP à API de IP.
 
-## 📋 Como Usar
+## Estrutura do Projeto
+├── enquete_app_vfinal.db   # Banco de dados SQLite (criado na primeira execução)
+└── app.py                  # Código principal da aplicação Streamlit
 
-### Modo Professor
+## Pré-requisitos
 
-1. Acesse o modo professor através da barra lateral
-2. Faça login com a senha (padrão: `admin123`)
-3. Crie uma nova enquete:
-   - Digite a pergunta
-   - Adicione até 5 opções de resposta
-   - Clique em "Salvar e Ativar Enquete"
-4. Acompanhe os resultados em tempo real
-5. Use o botão "Desativar Enquete" quando desejar encerrar a votação
-6. Use o botão "Resetar Votos" para limpar os resultados anteriores
+* Python 3.7 ou superior.
+* `pip` (gerenciador de pacotes Python).
 
-### Modo Aluno
+## Instalação e Execução
 
-1. Aguarde o professor criar e ativar uma enquete
-2. Quando a enquete estiver ativa, selecione uma opção de resposta
-3. Clique em "Votar" para registrar seu voto
-4. Veja os resultados após votar
+1.  **Clone o repositório (se aplicável) ou copie o arquivo `app.py`.**
 
-## ⚙️ Arquivos de Configuração
+2.  **Crie e ative um ambiente virtual (recomendado):**
+    ```bash
+    python -m venv venv
+    # No Windows:
+    # venv\Scripts\activate
+    # No macOS/Linux:
+    # source venv/bin/activate
+    ```
 
-O aplicativo cria três arquivos JSON para armazenar dados:
+3.  **Instale as dependências:**
+    Crie um arquivo `requirements.txt` com o seguinte conteúdo:
+    ```txt
+    streamlit
+    pandas
+    requests
+    ```
+    E então execute:
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-- **enquete_config.json**: Configurações gerais (senha, status da enquete)
-- **enquete_dados.json**: Dados da enquete (pergunta e opções)
-- **enquete_resultados.json**: Resultados da votação
+4.  **Execute a aplicação Streamlit:**
+    Navegue até o diretório onde `app.py` está localizado e execute:
+    ```bash
+    streamlit run app.py
+    ```
+    A aplicação será aberta automaticamente no seu navegador web.
 
-## 🛠️ Personalização
+## Configuração Inicial
 
-- Para alterar a senha padrão, edite a linha `"senha_professor": hash_password("admin123")` no arquivo `app.py`
-- Ajuste o tempo de atualização automática modificando os valores de `time.sleep()` no código
+* Na primeira execução, o banco de dados `enquete_app_vfinal.db` será criado.
+* A senha padrão do professor é `admin123`. É altamente recomendável alterá-la através do painel do professor após o primeiro login.
 
-## 🔒 Segurança
+## Como Usar
 
-Note que este é um aplicativo local e a segurança é básica. Para uso em ambientes de produção, considere implementar medidas de segurança adicionais.
+1.  **Professor**:
+    * Acesse o aplicativo.
+    * Clique em "Professor" na barra lateral.
+    * Faça login com a senha (padrão: `admin123`).
+    * No painel do professor:
+        * Defina o número de opções de resposta desejado.
+        * Digite a pergunta da enquete e as opções de resposta.
+        * Clique em "Salvar e Ativar Enquete". Os votos para a nova configuração da enquete são resetados.
+        * Monitore os resultados em tempo real.
+        * Para encerrar a votação e resetar os votos, clique em "Desativar Enquete".
+        * Use o botão "Alterar Senha" para definir uma nova senha.
+        * Use "Logout" para retornar à tela de login.
 
-## 📝 Licença
+2.  **Aluno**:
+    * Acesse o aplicativo. A tela mostrará "Aguardando Nova Enquete" se nenhuma estiver ativa (com auto-refresh).
+    * Quando uma enquete estiver ativa, ela será exibida.
+    * Selecione uma opção e clique em "Votar".
+    * Após votar, os resultados da enquete serão exibidos e atualizados automaticamente.
+    * Use o botão "Recarregar Enquete" na barra lateral para forçar uma atualização da página.
 
-Este projeto é livre para uso educacional.
+## Possíveis Melhorias Futuras
+
+* Suporte para múltiplas enquetes salvas e um histórico de enquetes.
+* Exportação de resultados da enquete (ex: para CSV).
+* Autenticação de alunos (se necessário para cenários mais controlados).
+* Melhorias na interface e experiência do usuário, como feedback visual mais dinâmico.
+* Opção para o professor editar uma enquete ativa sem necessariamente resetar todos os votos (ex: corrigir um erro de digitação em uma opção).
+
+## Autor
+
+* **Ary Ribeiro**
+* Contato: [aryribeiro@gmail.com](mailto:aryribeiro@gmail.com)
