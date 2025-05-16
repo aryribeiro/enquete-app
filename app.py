@@ -746,7 +746,7 @@ def app_router():
                 link_html = f"<a href='?page=historico_view&enquete_id={item_hist['id']}' target='_blank'>📊 {pergunta_curta} ({ts_formatado})</a>"
                 st.markdown(f"<div class='sidebar-history-link'>{link_html}</div>", unsafe_allow_html=True)
         else:
-            st.sidebar.caption("Nenhuma enquete no histórico.")
+            st.sidebar.caption("Nenhuma enquete no histórico")
     
     # Roteamento de tela principal
     modo_atual = st.session_state.get('modo')
