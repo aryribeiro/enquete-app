@@ -1,4 +1,4 @@
-# Enquete App | Sua Enquete em Tempo Real 📊
+# 📊Enquete App | Sua Enquete em Tempo Real
 
 O Enquete App é uma aplicação web construída com Streamlit e Python que permite a criação de enquetes em tempo real. É ideal para salas de aula, apresentações ou qualquer situação onde um feedback rápido do público é necessário.
 
