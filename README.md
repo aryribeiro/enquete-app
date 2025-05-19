@@ -1,3 +1,6 @@
+Obs.: caso o app esteja no modo "sleeping" (dormindo) ao entrar, basta clicar no botão que estará disponível e aguardar, para ativar o mesmo. 
+![print](https://github.com/user-attachments/assets/9fe30760-1ecf-48ee-83ac-f7030c05cc39)
+
 # 📊Enquete App | Sua Enquete em Tempo Real
 
 O Enquete App é uma aplicação web construída com Streamlit e Python que permite a criação de enquetes em tempo real. É ideal para salas de aula, apresentações ou qualquer situação onde um feedback rápido do público é necessário.
