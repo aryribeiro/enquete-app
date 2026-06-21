@@ -11,7 +11,6 @@ import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from streamlit.components.v1 import html
-from streamlit_autorefresh import st_autorefresh
 
 # --- Constantes ---
 DB_NAME = "enquete_app_vfinal_cookie.db"
@@ -517,7 +516,8 @@ def mostrar_painel_professor():
             mostrar_resultados(dados_atuais, resultados_display)
         else:
             st.info("A enquete ativa não possui opções configuradas.")
-        st_autorefresh(interval=5000, key="professor_autorefresh")
+        time.sleep(5)
+        st.rerun()
     else:
         st.info("A enquete está inativa. Ative-a para ver os resultados ou permitir novos votos.")
 
@@ -578,7 +578,8 @@ def mostrar_tela_aluno():
     if st.session_state.voto_registrado_nesta_sessao:
         st.success("🙂 Seu voto foi registrado na enquete! Por favor aguarde os demais colegas votarem...")
         mostrar_resultados(dados_enquete_db, resultados_db)
-        st_autorefresh(interval=7000, key="aluno_autorefresh")
+        time.sleep(7)
+        st.rerun()
     else:
         opcoes_validas_aluno = [opt for opt in opcoes_enquete_lista if opt and opt.strip()]
         if not opcoes_validas_aluno:

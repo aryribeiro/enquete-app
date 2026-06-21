@@ -1,3 +1,2 @@
 streamlit==1.47.1
 pandas
-streamlit-autorefresh
