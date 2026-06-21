@@ -35,10 +35,14 @@ _CSS = """
 <style>
     .main { background-color: #ffffff; color: #333333; }
     .block-container { padding-top: 1rem; padding-bottom: 0rem; }
-    /* Esconde header (menus Streamlit) e footer — toggle do sidebar fica fora do header */
-    header { display: none !important; }
-    footer { display: none !important; }
+    /* Header transparente preserva toggle do sidebar */
+    .stApp > header {
+        background-color: transparent;
+    }
+    /* Esconde os botões do header (Share, Deploy, etc) sem esconder o header em si */
+    [data-testid="stToolbar"] { display: none !important; }
     #MainMenu { display: none !important; }
+    footer { display: none !important; }
     div[data-testid="stAppViewBlockContainer"] {
         padding-top: 0 !important; padding-bottom: 0 !important;
     }
