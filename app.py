@@ -39,9 +39,6 @@ _CSS = """
     .stApp > header {
         background-color: transparent;
     }
-    [data-testid="stToolbar"] {
-        visibility: hidden !important;
-    }
     footer {
         visibility: hidden !important;
     }
