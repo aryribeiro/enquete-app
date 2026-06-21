@@ -36,9 +36,7 @@ _CSS = """
     .main { background-color: #ffffff; color: #333333; }
     .main > div { padding-top: 1rem; }
     .stApp > header { background-color: transparent; }
-    [data-testid="stToolbar"] { display: none !important; }
-    #MainMenu { display: none !important; }
-    footer { display: none !important; }
+    footer { visibility: hidden; }
     .stButton>button { width: 100%; }
     .sidebar-history-link a {
         font-size: 0.9em;
