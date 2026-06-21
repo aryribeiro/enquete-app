@@ -33,6 +33,12 @@ st.set_page_config(
 # --- CSS (estático, injetado uma vez via constante) ---
 _CSS = """
 <style>
+    .main > div {
+        padding-top: 1rem;
+    }
+    .stApp > header {
+        background-color: transparent;
+    }
     .stButton>button { width: 100%; }
     .sidebar-history-link a {
         font-size: 0.9em;
@@ -797,19 +803,9 @@ def app_router():
         padding-top: 1rem;
         padding-bottom: 0rem;
     }
-    /* Esconde o conteúdo do header mas mantém o toggle do sidebar visível */
-    [data-testid="stHeader"] {
-        height: 2.5rem;
-        background: transparent !important;
-    }
-    [data-testid="stHeader"] > div:first-child {
-        visibility: visible !important;
-    }
-    [data-testid="stToolbar"] {
-        display: none !important;
-    }
-    #MainMenu {display: none !important;}
+    header {display: none !important;}
     footer {display: none !important;}
+    #MainMenu {display: none !important;}
     div[data-testid="stAppViewBlockContainer"] {
         padding-top: 0 !important;
         padding-bottom: 0 !important;
