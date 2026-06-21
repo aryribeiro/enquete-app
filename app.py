@@ -118,37 +118,43 @@ def _safe_db_execute(fn, default=None):
 
 
 # --- Persistência do ID de votação via localStorage ---
-def _inject_localStorage_voting_id():
-    js = """
+def _inject_localStorage_sync():
+    session_id = st.session_state.get("user_voting_id", "")
+    if not session_id:
+        return
+    js = f"""
     <script>
-    (function() {
-        try {
+    (function() {{
+        try {{
             var KEY = 'enquete_app_voting_id';
             var stored = localStorage.getItem(KEY);
-            if (!stored) {
-                stored = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, function(c) {
-                    return (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16);
-                });
-                localStorage.setItem(KEY, stored);
-            }
-            var url = new URL(window.parent.location.href);
-            var currentVid = url.searchParams.get('vid');
-            if (currentVid !== stored) {
-                url.searchParams.set('vid', stored);
-                window.parent.location.replace(url.toString());
-            }
-        } catch(e) {}
-    })();
+            var sessionId = "{session_id}";
+            if (stored) {{
+                // localStorage já tem ID — se for diferente do session, forçar reload com o correto
+                if (stored !== sessionId) {{
+                    var url = new URL(window.parent.location.href);
+                    url.searchParams.set('vid', stored);
+                    window.parent.location.replace(url.toString());
+                }}
+            }} else {{
+                // Primeiro acesso: salvar o session_id no localStorage
+                localStorage.setItem(KEY, sessionId);
+            }}
+        }} catch(e) {{}}
+    }})();
     </script>
     """
     html(js, height=0)
 
 
-def get_persistent_voting_id():
-    vid = st.query_params.get("vid", None)
-    if vid and 30 <= len(vid) <= 40:
-        return vid
-    return None
+def _get_voting_id():
+    vid_from_url = st.query_params.get("vid", None)
+    if vid_from_url and 30 <= len(vid_from_url) <= 40:
+        st.session_state.user_voting_id = vid_from_url
+        return vid_from_url
+    if "user_voting_id" not in st.session_state:
+        st.session_state.user_voting_id = str(uuid.uuid4())
+    return st.session_state.user_voting_id
 
 
 # --- Banco de Dados ---
@@ -717,11 +723,7 @@ def mostrar_tela_alterar_senha():
 
 
 def mostrar_tela_aluno():
-    voting_id = get_persistent_voting_id()
-    if not voting_id:
-        _inject_localStorage_voting_id()
-        st.info("⌛ Preparando identificação... A página será recarregada automaticamente.")
-        return
+    voting_id = _get_voting_id()
 
     verificar_deadline()
 
@@ -891,7 +893,7 @@ def app_router():
     initialize_session_state()
     _init_db_once()
 
-    _inject_localStorage_voting_id()
+    _get_voting_id()
 
     page_param = st.query_params.get("page", None)
     enquete_id_param_list = st.query_params.get_all("enquete_id")
@@ -981,6 +983,8 @@ def app_router():
     else:
         st.session_state.modo = "aluno"
         st.rerun()
+
+    _inject_localStorage_sync()
 
     st.markdown(
         '<hr><div style="text-align:center; margin-top:40px; padding:10px; color:#000000; font-size:16px;">'
