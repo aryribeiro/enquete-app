@@ -38,13 +38,8 @@ _CSS = """
     /* Esconde menu hamburger e footer, mas preserva o toggle do sidebar */
     #MainMenu { display: none !important; }
     footer { display: none !important; }
-    [data-testid="stStatusWidget"] { display: none !important; }
-    button[kind="header"] { display: none !important; }
-    [data-testid="stHeader"] {
-        background: transparent !important;
-        height: 0 !important;
-        min-height: 0 !important;
-        padding: 0 !important;
+    .stApp > header {
+        background-color: transparent;
     }
     div[data-testid="stAppViewBlockContainer"] {
         padding-top: 0 !important; padding-bottom: 0 !important;
