@@ -28,6 +28,7 @@ st.set_page_config(
     page_title="Enquete App | Sua enquete em tempo real",
     page_icon="📊",
     layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
 # --- CSS (estático, injetado uma vez via constante) ---
@@ -35,9 +36,14 @@ _CSS = """
 <style>
     .main { background-color: #ffffff; color: #333333; }
     .block-container { padding-top: 1rem; padding-bottom: 0rem; }
-    header, footer, #MainMenu { display: none !important; }
-    div[data-testid="stAppViewBlockContainer"], div[data-testid="stVerticalBlock"] {
-        padding-top: 0 !important; padding-bottom: 0 !important; gap: 0 !important;
+    header { display: none !important; }
+    footer { display: none !important; }
+    #MainMenu { display: none !important; }
+    div[data-testid="stAppViewBlockContainer"] {
+        padding-top: 0 !important; padding-bottom: 0 !important;
+    }
+    div[data-testid="stVerticalBlock"] {
+        gap: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important;
     }
     .element-container { margin-top: 0 !important; margin-bottom: 0 !important; }
     .stButton>button { width: 100%; }
