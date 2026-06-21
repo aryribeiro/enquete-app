@@ -8,7 +8,7 @@ import os
 import sqlite3
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from streamlit.components.v1 import html
 
@@ -21,6 +21,8 @@ HISTORICO_LIMIT = 5
 UTC_TZ = ZoneInfo("UTC")
 BR_TZ = ZoneInfo("America/Sao_Paulo")
 SALT_SECRET = os.environ.get("PASSWORD_SALT", "enquete-app-default-salt-2024")
+REFRESH_INTERVAL_STUDENT = 3
+REFRESH_INTERVAL_PROFESSOR = 4
 
 # --- Page Config ---
 st.set_page_config(
@@ -115,6 +117,40 @@ def _safe_db_execute(fn, default=None):
             return default
 
 
+# --- Persistência do ID de votação via localStorage ---
+def _inject_localStorage_voting_id():
+    js = """
+    <script>
+    (function() {
+        try {
+            var KEY = 'enquete_app_voting_id';
+            var stored = localStorage.getItem(KEY);
+            if (!stored) {
+                stored = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, function(c) {
+                    return (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16);
+                });
+                localStorage.setItem(KEY, stored);
+            }
+            var url = new URL(window.parent.location.href);
+            var currentVid = url.searchParams.get('vid');
+            if (currentVid !== stored) {
+                url.searchParams.set('vid', stored);
+                window.parent.location.replace(url.toString());
+            }
+        } catch(e) {}
+    })();
+    </script>
+    """
+    html(js, height=0)
+
+
+def get_persistent_voting_id():
+    vid = st.query_params.get("vid", None)
+    if vid and 30 <= len(vid) <= 40:
+        return vid
+    return None
+
+
 # --- Banco de Dados ---
 @st.cache_resource
 def get_db_connection():
@@ -143,6 +179,14 @@ def _init_db_once():
     cursor.execute(
         "INSERT OR IGNORE INTO configuracao (chave, valor) VALUES (?, ?)",
         ("enquete_ativa", "0"),
+    )
+    cursor.execute(
+        "INSERT OR IGNORE INTO configuracao (chave, valor) VALUES (?, ?)",
+        ("votacao_encerrada", "0"),
+    )
+    cursor.execute(
+        "INSERT OR IGNORE INTO configuracao (chave, valor) VALUES (?, ?)",
+        ("deadline_timestamp", ""),
     )
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS enquete_ativa_definicao (
@@ -246,12 +290,21 @@ def db_carregar_enquete_historico_por_id(id_historico):
     return _safe_db_execute(_query, default=None)
 
 
+def db_limpar_historico():
+    conn = get_db_connection()
+    try:
+        conn.execute("DELETE FROM historico_enquetes")
+        conn.commit()
+    except sqlite3.Error as e:
+        st.error(f"Erro ao limpar histórico: {e}")
+
+
 def db_carregar_config_valor(chave, default=None):
     def _query():
         conn = get_db_connection()
         row = conn.execute("SELECT valor FROM configuracao WHERE chave = ?", (chave,)).fetchone()
         if row:
-            if chave == "enquete_ativa":
+            if chave in ("enquete_ativa", "votacao_encerrada"):
                 return row["valor"] == "1"
             return row["valor"]
         return default
@@ -261,7 +314,10 @@ def db_carregar_config_valor(chave, default=None):
 
 def db_salvar_config_valor(chave, valor):
     conn = get_db_connection()
-    valor_db = "1" if (chave == "enquete_ativa" and valor) else ("0" if chave == "enquete_ativa" else valor)
+    if chave in ("enquete_ativa", "votacao_encerrada"):
+        valor_db = "1" if valor else "0"
+    else:
+        valor_db = str(valor) if valor is not None else ""
     try:
         conn.execute("REPLACE INTO configuracao (chave, valor) VALUES (?, ?)", (chave, valor_db))
         conn.commit()
@@ -365,6 +421,36 @@ def db_verificar_se_cookie_votou(user_voting_id):
     return bool(result)
 
 
+# --- Timer / Deadline ---
+def verificar_deadline():
+    deadline_str = db_carregar_config_valor("deadline_timestamp", "")
+    if not deadline_str:
+        return False
+    try:
+        deadline_dt = datetime.fromisoformat(deadline_str)
+        if datetime.now(UTC_TZ) >= deadline_dt:
+            db_salvar_config_valor("votacao_encerrada", True)
+            db_salvar_config_valor("deadline_timestamp", "")
+            return True
+    except ValueError:
+        pass
+    return False
+
+
+def calcular_tempo_restante():
+    deadline_str = db_carregar_config_valor("deadline_timestamp", "")
+    if not deadline_str:
+        return None
+    try:
+        deadline_dt = datetime.fromisoformat(deadline_str)
+        diff = deadline_dt - datetime.now(UTC_TZ)
+        if diff.total_seconds() <= 0:
+            return 0
+        return int(diff.total_seconds())
+    except ValueError:
+        return None
+
+
 # --- Session State ---
 def initialize_session_state():
     defaults = {
@@ -393,6 +479,20 @@ def mostrar_tela_login():
             st.error("Senha incorreta!")
 
 
+def _arquivar_enquete_atual():
+    dados = db_carregar_dados_enquete()
+    if dados.get("pergunta", "").strip():
+        num_opcoes = len(dados.get("opcoes", []))
+        if num_opcoes >= MIN_OPTIONS:
+            resultados = db_carregar_resultados(num_opcoes)
+            db_adicionar_ao_historico(
+                dados["pergunta"],
+                dados["opcoes"],
+                resultados["votos"],
+                resultados["total_votos"],
+            )
+
+
 def mostrar_painel_professor():
     st.title("🖥️ Painel do Professor")
     col_nav1, col_nav2 = st.columns(2)
@@ -411,6 +511,7 @@ def mostrar_painel_professor():
     st.divider()
 
     enquete_ativa_db = db_carregar_config_valor("enquete_ativa", False)
+    votacao_encerrada_db = db_carregar_config_valor("votacao_encerrada", False)
     dados_enquete_db = db_carregar_dados_enquete()
     opcoes_salvas = dados_enquete_db.get("opcoes", [])
     num_opcoes_atuais = len(opcoes_salvas) if opcoes_salvas else st.session_state.num_opcoes_edicao
@@ -449,21 +550,22 @@ def mostrar_painel_professor():
         for i in range(st.session_state.num_opcoes_edicao):
             val_opt = opcoes_salvas[i] if i < len(opcoes_salvas) else ""
             opcoes_form_inputs[i] = st.text_input(f"Opção {i+1}", value=val_opt, key=f"painel_opt_db_vfinal_{i}")
+
+        timer_minutos = st.number_input(
+            "⏱️ Tempo limite (minutos) — 0 = sem limite",
+            min_value=0,
+            max_value=120,
+            value=0,
+            step=1,
+            key="painel_timer_minutos",
+        )
+
         submit_save_enquete = st.form_submit_button("Salvar e Ativar Enquete")
 
     if submit_save_enquete:
-        dados_enquete_anterior = db_carregar_dados_enquete()
-        enquete_estava_ativa = db_carregar_config_valor("enquete_ativa", False)
-        if enquete_estava_ativa and dados_enquete_anterior.get("pergunta", "").strip():
-            num_opcoes_anterior = len(dados_enquete_anterior.get("opcoes", []))
-            if num_opcoes_anterior >= MIN_OPTIONS:
-                resultados_anterior = db_carregar_resultados(num_opcoes_anterior)
-                db_adicionar_ao_historico(
-                    dados_enquete_anterior["pergunta"],
-                    dados_enquete_anterior["opcoes"],
-                    resultados_anterior["votos"],
-                    resultados_anterior["total_votos"],
-                )
+        if enquete_ativa_db and dados_enquete_db.get("pergunta", "").strip():
+            _arquivar_enquete_atual()
+
         opcoes_finais = [opt.strip() for opt in opcoes_form_inputs[: st.session_state.num_opcoes_edicao]]
         opcoes_validas_count = sum(1 for opt in opcoes_finais if opt)
         if not pergunta_form.strip() or opcoes_validas_count < MIN_OPTIONS:
@@ -471,49 +573,123 @@ def mostrar_painel_professor():
         else:
             db_salvar_dados_enquete(pergunta_form, opcoes_finais)
             db_salvar_config_valor("enquete_ativa", True)
+            db_salvar_config_valor("votacao_encerrada", False)
             db_limpar_votos_e_cookies(len(opcoes_finais))
+
+            if timer_minutos > 0:
+                deadline = datetime.now(UTC_TZ) + timedelta(minutes=timer_minutos)
+                db_salvar_config_valor("deadline_timestamp", deadline.isoformat())
+            else:
+                db_salvar_config_valor("deadline_timestamp", "")
+
             st.success("Enquete salva, ativada e votos resetados!")
             st.rerun()
 
+    # --- Controles da enquete ativa ---
     if enquete_ativa_db:
-        if st.button("Desativar Enquete", key="painel_desativar_db_vfinal"):
-            dados_enquete_a_desativar = db_carregar_dados_enquete()
-            if dados_enquete_a_desativar.get("pergunta", "").strip():
-                num_opcoes_desativada = len(dados_enquete_a_desativar.get("opcoes", []))
-                if num_opcoes_desativada >= MIN_OPTIONS:
-                    resultados_desativada = db_carregar_resultados(num_opcoes_desativada)
-                    db_adicionar_ao_historico(
-                        dados_enquete_a_desativar["pergunta"],
-                        dados_enquete_a_desativar["opcoes"],
-                        resultados_desativada["votos"],
-                        resultados_desativada["total_votos"],
-                    )
-            db_salvar_config_valor("enquete_ativa", False)
-            num_opcoes_calc = len(dados_enquete_a_desativar.get("opcoes", []))
-            db_limpar_votos_e_cookies(max(MIN_OPTIONS, num_opcoes_calc))
-            st.success("Enquete desativada, resultados arquivados e votos resetados!")
-            st.rerun()
+        st.divider()
+        st.subheader("Controles")
 
+        if not votacao_encerrada_db:
+            col_enc, col_des = st.columns(2)
+            with col_enc:
+                if st.button("🛑 Encerrar Votação", key="painel_encerrar_votacao", use_container_width=True):
+                    db_salvar_config_valor("votacao_encerrada", True)
+                    db_salvar_config_valor("deadline_timestamp", "")
+                    st.success("Votação encerrada! Resultados finais visíveis para os alunos.")
+                    st.rerun()
+            with col_des:
+                if st.button("❌ Desativar Enquete", key="painel_desativar_db_vfinal", use_container_width=True):
+                    _arquivar_enquete_atual()
+                    db_salvar_config_valor("enquete_ativa", False)
+                    db_salvar_config_valor("votacao_encerrada", False)
+                    db_salvar_config_valor("deadline_timestamp", "")
+                    num_opcoes_calc = len(dados_enquete_db.get("opcoes", []))
+                    db_limpar_votos_e_cookies(max(MIN_OPTIONS, num_opcoes_calc))
+                    st.success("Enquete desativada e arquivada no histórico!")
+                    st.rerun()
+        else:
+            col_reabrir, col_des = st.columns(2)
+            with col_reabrir:
+                if st.button("🔓 Reabrir Votação", key="painel_reabrir_votacao", use_container_width=True):
+                    db_salvar_config_valor("votacao_encerrada", False)
+                    st.success("Votação reaberta!")
+                    st.rerun()
+            with col_des:
+                if st.button("❌ Desativar Enquete", key="painel_desativar_encerrada", use_container_width=True):
+                    _arquivar_enquete_atual()
+                    db_salvar_config_valor("enquete_ativa", False)
+                    db_salvar_config_valor("votacao_encerrada", False)
+                    db_salvar_config_valor("deadline_timestamp", "")
+                    num_opcoes_calc = len(dados_enquete_db.get("opcoes", []))
+                    db_limpar_votos_e_cookies(max(MIN_OPTIONS, num_opcoes_calc))
+                    st.success("Enquete desativada e arquivada no histórico!")
+                    st.rerun()
+
+    # --- Status ---
+    st.divider()
     st.subheader("Status da Enquete")
-    enquete_ativa_status = db_carregar_config_valor("enquete_ativa", False)
-    if enquete_ativa_status:
-        st.success("Enquete ATIVA")
+    if enquete_ativa_db:
+        if votacao_encerrada_db:
+            st.warning("Enquete ATIVA — Votação ENCERRADA (resultados visíveis)")
+        else:
+            st.success("Enquete ATIVA — Votação ABERTA")
+            tempo_restante = calcular_tempo_restante()
+            if tempo_restante is not None:
+                if tempo_restante > 0:
+                    mins = tempo_restante // 60
+                    secs = tempo_restante % 60
+                    st.info(f"⏱️ Tempo restante: {mins:02d}:{secs:02d}")
+                else:
+                    verificar_deadline()
+                    st.rerun()
     else:
         st.error("Enquete INATIVA")
 
+    # --- Resultados ---
     st.subheader("Resultados da Votação")
-    if enquete_ativa_status:
+    if enquete_ativa_db:
         dados_atuais = db_carregar_dados_enquete()
         num_opcoes_resultados = len(dados_atuais.get("opcoes", []))
         if num_opcoes_resultados > 0:
             resultados_display = db_carregar_resultados(num_opcoes_resultados)
             mostrar_resultados(dados_atuais, resultados_display)
+
+            # Export CSV
+            if resultados_display["total_votos"] > 0:
+                st.divider()
+                csv_data = _gerar_csv(dados_atuais, resultados_display)
+                st.download_button(
+                    "📥 Exportar Resultados (CSV)",
+                    data=csv_data,
+                    file_name="enquete_resultados.csv",
+                    mime="text/csv",
+                    key="export_csv_prof",
+                )
         else:
             st.info("A enquete ativa não possui opções configuradas.")
-        time.sleep(5)
-        st.rerun()
+
+        if not votacao_encerrada_db:
+            time.sleep(REFRESH_INTERVAL_PROFESSOR)
+            st.rerun()
     else:
-        st.info("A enquete está inativa. Ative-a para ver os resultados ou permitir novos votos.")
+        st.info("A enquete está inativa. Ative-a para ver os resultados.")
+
+
+def _gerar_csv(dados_enquete, resultados):
+    opcoes = dados_enquete.get("opcoes", [])
+    votos = resultados.get("votos", [])
+    total = resultados.get("total_votos", 0)
+    pergunta = dados_enquete.get("pergunta", "")
+
+    lines = [f"Enquete: {pergunta}", "Opção,Votos,Percentual"]
+    for i, opt in enumerate(opcoes):
+        if opt and opt.strip():
+            v = votos[i] if i < len(votos) else 0
+            perc = (v / total * 100) if total > 0 else 0
+            lines.append(f"{opt},{v},{perc:.1f}%")
+    lines.append(f"TOTAL,{total},100%")
+    return "\n".join(lines)
 
 
 def mostrar_tela_alterar_senha():
@@ -527,8 +703,8 @@ def mostrar_tela_alterar_senha():
                 st.error("Campos não podem ser vazios.")
             elif nova_senha != confirmar:
                 st.error("Senhas não coincidem.")
-            elif len(nova_senha) < 6:
-                st.error("Senha curta (mínimo 6 caracteres).")
+            elif len(nova_senha) < 8:
+                st.error("Senha muito curta (mínimo 8 caracteres).")
             else:
                 db_salvar_config_valor("senha_professor", hash_password(nova_senha))
                 st.success("Senha alterada com sucesso!")
@@ -541,14 +717,20 @@ def mostrar_tela_alterar_senha():
 
 
 def mostrar_tela_aluno():
-    if "user_voting_id" not in st.session_state or not st.session_state.user_voting_id:
-        st.info("⌛ Identificador de votação da sessão sendo preparado... Por favor, aguarde um momento.")
+    voting_id = get_persistent_voting_id()
+    if not voting_id:
+        _inject_localStorage_voting_id()
+        st.info("⌛ Preparando identificação... A página será recarregada automaticamente.")
         return
 
+    verificar_deadline()
+
     config_enquete_ativa = db_carregar_config_valor("enquete_ativa", False)
+    votacao_encerrada = db_carregar_config_valor("votacao_encerrada", False)
+
     if not config_enquete_ativa:
         st.title("⌛ Aguardando Nova Enquete...")
-        st.info("Nenhuma enquete ativa no momento. Use o botão 🔄 no Menu lateral para verificar")
+        st.info("Nenhuma enquete ativa no momento. Use o botão 🔄 no Menu lateral para verificar.")
         return
 
     dados_enquete_db = db_carregar_dados_enquete()
@@ -561,67 +743,77 @@ def mostrar_tela_aluno():
         return
 
     resultados_db = db_carregar_resultados(num_opcoes_atual)
-
-    user_id_for_vote = st.session_state.user_voting_id
-    ja_votou_db = db_verificar_se_cookie_votou(user_id_for_vote)
-    st.session_state.voto_registrado_nesta_sessao = ja_votou_db
+    ja_votou = db_verificar_se_cookie_votou(voting_id)
 
     st.title("📊 Participe da enquete")
     st.header(dados_enquete_db.get("pergunta", "Enquete sem pergunta definida"))
 
-    if st.session_state.voto_registrado_nesta_sessao:
-        st.success("🙂 Seu voto foi registrado na enquete! Por favor aguarde os demais colegas votarem...")
+    # Timer visível para o aluno
+    if not votacao_encerrada:
+        tempo_restante = calcular_tempo_restante()
+        if tempo_restante is not None and tempo_restante > 0:
+            mins = tempo_restante // 60
+            secs = tempo_restante % 60
+            st.caption(f"⏱️ Tempo restante: {mins:02d}:{secs:02d}")
+
+    # Estado: votação encerrada
+    if votacao_encerrada:
+        if ja_votou:
+            st.success("🏁 Votação encerrada! Seu voto foi computado.")
+        else:
+            st.warning("🏁 Votação encerrada! Não é mais possível votar.")
         mostrar_resultados(dados_enquete_db, resultados_db)
-        time.sleep(7)
+        return
+
+    # Estado: já votou (votação ainda aberta)
+    if ja_votou:
+        st.success("🙂 Seu voto foi registrado! Acompanhe os resultados em tempo real:")
+        mostrar_resultados(dados_enquete_db, resultados_db)
+        time.sleep(REFRESH_INTERVAL_STUDENT)
         st.rerun()
+        return
+
+    # Estado: ainda não votou
+    opcoes_validas_aluno = [opt for opt in opcoes_enquete_lista if opt and opt.strip()]
+    if not opcoes_validas_aluno:
+        st.warning("A enquete não possui opções válidas no momento.")
+        return
+
+    if len(opcoes_validas_aluno) != len(set(opcoes_validas_aluno)):
+        opcoes_display = [f"{opt} ({i+1})" if opcoes_validas_aluno.count(opt) > 1 else opt for i, opt in enumerate(opcoes_validas_aluno)]
     else:
-        opcoes_validas_aluno = [opt for opt in opcoes_enquete_lista if opt and opt.strip()]
-        if not opcoes_validas_aluno:
-            st.warning("A enquete não possui opções válidas no momento.")
+        opcoes_display = opcoes_validas_aluno
+
+    key_radio = f"voto_radio_{hashlib.md5(json.dumps(opcoes_validas_aluno).encode()).hexdigest()}"
+    indice_escolhido = st.radio(
+        "Escolha uma opção:",
+        range(len(opcoes_display)),
+        format_func=lambda i: opcoes_display[i],
+        key=key_radio,
+    )
+
+    if st.button("Votar", key="aluno_votar_db_vfinal_cookie"):
+        if db_verificar_se_cookie_votou(voting_id):
+            st.warning("Voto já registrado para este dispositivo/navegador.")
+            st.rerun()
             return
 
-        if len(opcoes_validas_aluno) != len(set(opcoes_validas_aluno)):
-            opcoes_display = [f"{opt} ({i+1})" if opcoes_validas_aluno.count(opt) > 1 else opt for i, opt in enumerate(opcoes_validas_aluno)]
-        else:
-            opcoes_display = opcoes_validas_aluno
-
-        key_radio = f"voto_radio_{hashlib.md5(json.dumps(opcoes_validas_aluno).encode()).hexdigest()}"
-        indice_escolhido = st.radio(
-            "Escolha uma opção:",
-            range(len(opcoes_display)),
-            format_func=lambda i: opcoes_display[i],
-            key=key_radio,
-        )
-
-        if st.button("Votar", key="aluno_votar_db_vfinal_cookie"):
-            if not user_id_for_vote:
-                st.error("Falha ao verificar sua identificação. Por favor, recarregue a página.")
+        if indice_escolhido is not None:
+            opcao_original = opcoes_validas_aluno[indice_escolhido]
+            try:
+                indice_real = opcoes_enquete_lista.index(opcao_original)
+            except ValueError:
+                st.error("Opção inválida. Tente novamente.")
                 return
 
-            if db_verificar_se_cookie_votou(user_id_for_vote):
-                st.warning("Voto já registrado para este dispositivo/navegador.")
-                st.session_state.voto_registrado_nesta_sessao = True
+            if db_registrar_voto(indice_real, voting_id):
+                st.success("Voto registrado com sucesso!")
                 st.rerun()
-                return
-
-            if indice_escolhido is not None:
-                opcao_original = opcoes_validas_aluno[indice_escolhido]
-                try:
-                    indice_real = opcoes_enquete_lista.index(opcao_original)
-                except ValueError:
-                    st.error("Opção inválida. Tente novamente.")
-                    return
-
-                if db_registrar_voto(indice_real, user_id_for_vote):
-                    st.session_state.voto_registrado_nesta_sessao = True
-                    st.success("Voto registrado com sucesso!")
-                    st.rerun()
-                else:
-                    st.error("Erro: Voto já registrado ou opção inválida.")
-                    st.session_state.voto_registrado_nesta_sessao = True
-                    st.rerun()
             else:
-                st.warning("Selecione uma opção.")
+                st.error("Erro: Voto já registrado ou opção inválida.")
+                st.rerun()
+        else:
+            st.warning("Selecione uma opção.")
 
 
 def mostrar_resultados(dados_enquete_param, resultados_param):
@@ -699,10 +891,7 @@ def app_router():
     initialize_session_state()
     _init_db_once()
 
-    if "user_voting_id" not in st.session_state:
-        st.session_state.user_voting_id = str(uuid.uuid4())
-        st.rerun()
-        return
+    _inject_localStorage_voting_id()
 
     page_param = st.query_params.get("page", None)
     enquete_id_param_list = st.query_params.get_all("enquete_id")
@@ -767,7 +956,14 @@ def app_router():
                 )
                 st.markdown(f"<div class='sidebar-history-link'>{link_html}</div>", unsafe_allow_html=True)
         else:
-            st.sidebar.caption("Nenhuma enquete no histórico")
+            st.caption("Nenhuma enquete no histórico")
+
+        if st.session_state.modo == "professor" and historico_enquetes:
+            st.divider()
+            if st.button("🗑️ Limpar Histórico", key="sidebar_limpar_hist", use_container_width=True):
+                db_limpar_historico()
+                st.success("Histórico limpo!")
+                st.rerun()
 
     modo_atual = st.session_state.get("modo")
     if modo_atual == "login_professor":
