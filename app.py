@@ -34,22 +34,11 @@ st.set_page_config(
 _CSS = """
 <style>
     .main { background-color: #ffffff; color: #333333; }
-    .block-container { padding-top: 1rem; padding-bottom: 0rem; }
-    /* Header transparente preserva toggle do sidebar */
-    .stApp > header {
-        background-color: transparent;
-    }
-    /* Esconde os botões do header (Share, Deploy, etc) sem esconder o header em si */
+    .main > div { padding-top: 1rem; }
+    .stApp > header { background-color: transparent; }
     [data-testid="stToolbar"] { display: none !important; }
     #MainMenu { display: none !important; }
     footer { display: none !important; }
-    div[data-testid="stAppViewBlockContainer"] {
-        padding-top: 0 !important; padding-bottom: 0 !important;
-    }
-    div[data-testid="stVerticalBlock"] {
-        gap: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important;
-    }
-    .element-container { margin-top: 0 !important; margin-bottom: 0 !important; }
     .stButton>button { width: 100%; }
     .sidebar-history-link a {
         font-size: 0.9em;
