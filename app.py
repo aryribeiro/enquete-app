@@ -803,7 +803,9 @@ def app_router():
         padding-top: 1rem;
         padding-bottom: 0rem;
     }
-    header {display: none !important;}
+    [data-testid="stToolbar"] {display: none !important;}
+    [data-testid="manage-app-button"] {display: none !important;}
+    [data-testid="stStatusWidget"] {display: none !important;}
     footer {display: none !important;}
     #MainMenu {display: none !important;}
     div[data-testid="stAppViewBlockContainer"] {
