@@ -33,10 +33,8 @@ st.set_page_config(
 # --- CSS (estático, injetado uma vez via constante) ---
 _CSS = """
 <style>
-    .main { background-color: #ffffff; color: #333333; }
     .main > div { padding-top: 1rem; }
     .stApp > header { background-color: transparent; }
-    footer { visibility: hidden; }
     .stButton>button { width: 100%; }
     .sidebar-history-link a {
         font-size: 0.9em;
@@ -790,6 +788,35 @@ def app_router():
         'Por <strong>Ary Ribeiro:</strong> <a href="mailto:aryribeiro@gmail.com">aryribeiro@gmail.com</a></div>',
         unsafe_allow_html=True,
     )
+
+    st.markdown("""
+<style>
+    .main {
+        background-color: #ffffff;
+        color: #333333;
+    }
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 0rem;
+    }
+    header {display: none !important;}
+    footer {display: none !important;}
+    #MainMenu {display: none !important;}
+    div[data-testid="stAppViewBlockContainer"] {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    div[data-testid="stVerticalBlock"] {
+        gap: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    .element-container {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
