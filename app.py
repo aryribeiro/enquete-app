@@ -35,9 +35,17 @@ _CSS = """
 <style>
     .main { background-color: #ffffff; color: #333333; }
     .block-container { padding-top: 1rem; padding-bottom: 0rem; }
-    header { display: none !important; }
-    footer { display: none !important; }
+    /* Esconde menu hamburger e footer, mas preserva o toggle do sidebar */
     #MainMenu { display: none !important; }
+    footer { display: none !important; }
+    [data-testid="stStatusWidget"] { display: none !important; }
+    button[kind="header"] { display: none !important; }
+    [data-testid="stHeader"] {
+        background: transparent !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        padding: 0 !important;
+    }
     div[data-testid="stAppViewBlockContainer"] {
         padding-top: 0 !important; padding-bottom: 0 !important;
     }
