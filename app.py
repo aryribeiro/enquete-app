@@ -10,7 +10,8 @@ import time
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from streamlit.components.v1 import html
+from streamlit import runtime
+from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 # --- Constantes ---
 DB_NAME = "enquete_app_vfinal_cookie.db"
@@ -18,6 +19,7 @@ MIN_OPTIONS = 2
 MAX_OPTIONS = 10
 DEFAULT_NUM_OPTIONS_ON_NEW = 2
 HISTORICO_LIMIT = 5
+AUTO_REFRESH_SECONDS = 5
 UTC_TZ = ZoneInfo("UTC")
 BR_TZ = ZoneInfo("America/Sao_Paulo")
 SALT_SECRET = os.environ.get("PASSWORD_SALT", "enquete-app-default-salt-2024")
@@ -65,6 +67,29 @@ def hash_password(password):
         SALT_SECRET.encode(),
         iterations=100_000,
     ).hex()
+
+
+def get_client_ip():
+    # IP público do cliente: atrás do proxy (Streamlit Cloud) vem no
+    # X-Forwarded-For; sem proxy, usa o IP direto da conexão websocket.
+    try:
+        xff = st.context.headers.get("X-Forwarded-For")
+        if xff:
+            return xff.split(",")[0].strip()
+        real_ip = st.context.headers.get("X-Real-Ip")
+        if real_ip:
+            return real_ip.strip()
+    except Exception:
+        pass
+    try:
+        ctx = get_script_run_ctx()
+        if ctx is not None:
+            session_info = runtime.get_instance().get_client(ctx.session_id)
+            if session_info is not None and session_info.request is not None:
+                return session_info.request.remote_ip
+    except Exception:
+        pass
+    return None
 
 
 def format_timestamp_br(timestamp_str):
@@ -510,7 +535,7 @@ def mostrar_painel_professor():
             mostrar_resultados(dados_atuais, resultados_display)
         else:
             st.info("A enquete ativa não possui opções configuradas.")
-        time.sleep(5)
+        time.sleep(AUTO_REFRESH_SECONDS)
         st.rerun()
     else:
         st.info("A enquete está inativa. Ative-a para ver os resultados ou permitir novos votos.")
@@ -548,7 +573,9 @@ def mostrar_tela_aluno():
     config_enquete_ativa = db_carregar_config_valor("enquete_ativa", False)
     if not config_enquete_ativa:
         st.title("⌛ Aguardando Nova Enquete...")
-        st.info("Nenhuma enquete ativa no momento. Use o botão 🔄 no Menu lateral para verificar")
+        st.info("Nenhuma enquete ativa no momento. A tela atualiza automaticamente.")
+        time.sleep(AUTO_REFRESH_SECONDS)
+        st.rerun()
         return
 
     dados_enquete_db = db_carregar_dados_enquete()
@@ -572,7 +599,7 @@ def mostrar_tela_aluno():
     if st.session_state.voto_registrado_nesta_sessao:
         st.success("🙂 Seu voto foi registrado na enquete! Por favor aguarde os demais colegas votarem...")
         mostrar_resultados(dados_enquete_db, resultados_db)
-        time.sleep(7)
+        time.sleep(AUTO_REFRESH_SECONDS)
         st.rerun()
     else:
         opcoes_validas_aluno = [opt for opt in opcoes_enquete_lista if opt and opt.strip()]
@@ -590,6 +617,7 @@ def mostrar_tela_aluno():
             "Escolha uma opção:",
             range(len(opcoes_display)),
             format_func=lambda i: opcoes_display[i],
+            index=None,
             key=key_radio,
         )
 
@@ -699,10 +727,14 @@ def app_router():
     initialize_session_state()
     _init_db_once()
 
-    if "user_voting_id" not in st.session_state:
-        st.session_state.user_voting_id = str(uuid.uuid4())
-        st.rerun()
-        return
+    # Identificador de voto = IP público do cliente: estável entre F5,
+    # abas e navegadores diferentes do mesmo usuário. Fallback por sessão
+    # só se o IP for indetectável.
+    client_ip = get_client_ip()
+    if client_ip:
+        st.session_state.user_voting_id = f"ip-{client_ip}"
+    elif "user_voting_id" not in st.session_state:
+        st.session_state.user_voting_id = f"sessao-{uuid.uuid4()}"
 
     page_param = st.query_params.get("page", None)
     enquete_id_param_list = st.query_params.get_all("enquete_id")
