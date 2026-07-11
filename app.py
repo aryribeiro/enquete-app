@@ -864,7 +864,8 @@ def app_router():
     st.markdown(
         '<hr><div style="text-align:center; margin-top:40px; padding:10px; color:#000000; font-size:16px;">'
         "<h4>📊 Enquete App</h4>Sua enquete em tempo real<br>"
-        'Por <strong>Ary Ribeiro:</strong> <a href="mailto:aryribeiro@gmail.com">aryribeiro@gmail.com</a></div>',
+        '<em>por <a href="https://www.linkedin.com/in/aryribeiro" target="_blank" rel="noopener" '
+        'style="text-decoration:none; color:inherit;"><strong>Ary Ribeiro</strong></a></em></div>',
         unsafe_allow_html=True,
     )
 
