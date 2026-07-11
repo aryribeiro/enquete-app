@@ -617,8 +617,9 @@ def mostrar_tela_aluno():
     if not config_enquete_ativa:
         st.title("⌛ Aguardando Nova Enquete...")
         st.info("Nenhuma enquete ativa no momento. A tela atualiza automaticamente.")
-        time.sleep(AUTO_REFRESH_SECONDS)
-        st.rerun()
+        # O rerun acontece no final do router, após o rodapé — dormir aqui
+        # deixaria um rodapé "fantasma" do run anterior visível na tela
+        st.session_state["_auto_refresh"] = True
         return
 
     dados_enquete_db = db_carregar_dados_enquete()
@@ -642,8 +643,8 @@ def mostrar_tela_aluno():
     if st.session_state.voto_registrado_nesta_sessao:
         st.success("🙂 Seu voto foi registrado na enquete! Por favor aguarde os demais colegas votarem...")
         mostrar_resultados(dados_enquete_db, resultados_db)
-        time.sleep(AUTO_REFRESH_SECONDS)
-        st.rerun()
+        # O rerun acontece no final do router, após o rodapé
+        st.session_state["_auto_refresh"] = True
     else:
         opcoes_validas_aluno = [opt for opt in opcoes_enquete_lista if opt and opt.strip()]
         if not opcoes_validas_aluno:
@@ -765,6 +766,17 @@ def mostrar_enquete_historico(id_historico):
         st.rerun()
 
 
+def mostrar_rodape():
+    # Rodapé único, exibido em todas as telas (professor, aluno e histórico)
+    st.markdown(
+        '<hr><div style="text-align:center; margin-top:40px; padding:10px; color:#000000; font-size:16px;">'
+        "<h4>📊 Enquete App</h4>Sua enquete em tempo real<br>"
+        '<em>por <a href="https://www.linkedin.com/in/aryribeiro" target="_blank" rel="noopener" '
+        'style="text-decoration:none; color:inherit;"><strong>Ary Ribeiro</strong></a></em></div>',
+        unsafe_allow_html=True,
+    )
+
+
 # --- Router Principal ---
 def app_router():
     initialize_session_state()
@@ -787,6 +799,7 @@ def app_router():
         if enquete_id_param:
             try:
                 mostrar_enquete_historico(int(enquete_id_param))
+                mostrar_rodape()
                 return
             except ValueError:
                 st.error("ID de enquete do histórico inválido.")
@@ -861,13 +874,7 @@ def app_router():
         st.session_state.modo = "aluno"
         st.rerun()
 
-    st.markdown(
-        '<hr><div style="text-align:center; margin-top:40px; padding:10px; color:#000000; font-size:16px;">'
-        "<h4>📊 Enquete App</h4>Sua enquete em tempo real<br>"
-        '<em>por <a href="https://www.linkedin.com/in/aryribeiro" target="_blank" rel="noopener" '
-        'style="text-decoration:none; color:inherit;"><strong>Ary Ribeiro</strong></a></em></div>',
-        unsafe_allow_html=True,
-    )
+    mostrar_rodape()
 
     st.markdown("""
 <style>
@@ -897,6 +904,12 @@ def app_router():
     }
 </style>
 """, unsafe_allow_html=True)
+
+    # Auto-refresh das telas do aluno: dorme só DEPOIS de renderizar tudo
+    # (inclusive o rodapé), para nenhum elemento ficar órfão entre os runs
+    if st.session_state.pop("_auto_refresh", False):
+        time.sleep(AUTO_REFRESH_SECONDS)
+        st.rerun()
 
 
 if __name__ == "__main__":
