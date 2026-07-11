@@ -3,6 +3,7 @@ import pandas as pd
 import html as html_module
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import sqlite3
@@ -12,6 +13,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from streamlit import runtime
 from streamlit.runtime.scriptrunner import get_script_run_ctx
+from streamlit_js_eval import streamlit_js_eval
 
 # --- Constantes ---
 DB_NAME = "enquete_app_vfinal_cookie.db"
@@ -54,6 +56,10 @@ _CSS = """
     .sidebar-history-link a:hover {
         text-decoration: underline;
     }
+    /* Esconde o iframe invisível do componente que captura o IP no navegador */
+    iframe[title="streamlit_js_eval.streamlit_js_eval"] {
+        display: none !important;
+    }
 </style>
 """
 st.markdown(_CSS, unsafe_allow_html=True)
@@ -69,24 +75,61 @@ def hash_password(password):
     ).hex()
 
 
-def get_client_ip():
-    # IP público do cliente: atrás do proxy (Streamlit Cloud) vem no
-    # X-Forwarded-For; sem proxy, usa o IP direto da conexão websocket.
+def _public_ip(value):
+    # Retorna o IP público normalizado, ou None. Descarta loopback e redes
+    # privadas (192.168.x/10.x) — que é tudo o que o proxy do Streamlit
+    # Cloud entrega nos headers, inviabilizando a detecção server-side.
     try:
-        xff = st.context.headers.get("X-Forwarded-For")
-        if xff:
-            return xff.split(",")[0].strip()
+        ip_obj = ipaddress.ip_address(value)
+        if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
+            ip_obj = ip_obj.ipv4_mapped
+        return str(ip_obj) if ip_obj.is_global else None
+    except (ValueError, TypeError):
+        return None
+
+
+def get_browser_public_ip():
+    # IP público obtido no NAVEGADOR do aluno via JS — independe do proxy.
+    # Retorna None no 1º render; o valor chega num rerun seguinte.
+    try:
+        return streamlit_js_eval(
+            js_expressions="fetch('https://api.ipify.org').then(r => r.text()).catch(() => null)",
+            key="browser_public_ip",
+        )
+    except Exception:
+        return None
+
+
+def get_client_ip():
+    # 1) IP capturado no navegador (única fonte confiável no Streamlit Cloud)
+    browser_ip = get_browser_public_ip()
+    if browser_ip:
+        normalized = _public_ip(str(browser_ip).strip())
+        if normalized:
+            st.session_state.client_public_ip = normalized
+    if st.session_state.get("client_public_ip"):
+        return st.session_state.client_public_ip
+    # 2) Fallback server-side: headers do proxy (aceita apenas IP público)
+    try:
+        xff = st.context.headers.get("X-Forwarded-For") or ""
+        for cand in xff.split(","):
+            pub = _public_ip(cand.strip())
+            if pub:
+                return pub
         real_ip = st.context.headers.get("X-Real-Ip")
         if real_ip:
-            return real_ip.strip()
+            pub = _public_ip(real_ip.strip())
+            if pub:
+                return pub
     except Exception:
         pass
+    # 3) Fallback final: conexão websocket direta (aceita apenas IP público)
     try:
         ctx = get_script_run_ctx()
         if ctx is not None:
             session_info = runtime.get_instance().get_client(ctx.session_id)
             if session_info is not None and session_info.request is not None:
-                return session_info.request.remote_ip
+                return _public_ip(session_info.request.remote_ip)
     except Exception:
         pass
     return None

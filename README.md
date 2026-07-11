@@ -20,7 +20,7 @@ O Enquete App é uma aplicação web construída com Streamlit e Python que perm
     * Botão de Logout.
 * **Interface do Aluno**:
     * Visualização da enquete ativa, com opções **sem pré-seleção** (nenhuma alternativa vem marcada).
-    * **Voto único por IP público**: o IP do aluno é obtido no servidor via header `X-Forwarded-For` do proxy (não é o IP do servidor Streamlit). F5, abrir outra aba ou até outro navegador no mesmo dispositivo/rede **não** permitem votar de novo — o aluno só volta a votar quando o professor ativa uma nova enquete.
+    * **Voto único por IP público**: o IP do aluno é capturado **no próprio navegador** via JavaScript (`streamlit-js-eval` + ipify), pois o proxy do Streamlit Cloud não repassa o IP do cliente ao servidor. F5, abrir outra aba ou até outro navegador no mesmo dispositivo/rede **não** permitem votar de novo — o aluno só volta a votar quando o professor ativa uma nova enquete.
     * Após votar, o aluno acompanha os resultados em tempo real: as barras de progresso se movem automaticamente (auto-refresh a cada 5 segundos).
     * Tela de "Aguardando Nova Enquete" com auto-refresh — quando o professor ativa uma enquete, ela aparece sozinha na tela do aluno.
     * Botão 🔄 na barra lateral para atualização manual, se desejado.
